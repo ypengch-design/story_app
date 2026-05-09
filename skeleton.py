@@ -35,11 +35,10 @@ def generate_story_via_api(caption, token):
         f"End with a happy sentence. Write in third person. [/INST]"
     )
     try:
-        # 使用最新的文本生成模型，可尝试多个
+        
         response = client.text_generation(
             prompt,
-            model="mistralai/Mistral-7B-Instruct-v0.1",   # 如果还不行就换下面注释的那个
-            # model="HuggingFaceH4/zephyr-7b-beta",      # 备选
+            model="HuggingFaceH4/zephyr-7b-beta",     
             max_new_tokens=200,
             temperature=0.8,
             top_p=0.9,
