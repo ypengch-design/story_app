@@ -4,6 +4,7 @@
 import streamlit as st
 from PIL import Image
 from transformers import BlipProcessor, BlipForConditionalGeneration
+from huggingface_hub import InferenceClient
 from gtts import gTTS
 import io
 import requests
@@ -24,9 +25,8 @@ def load_image_captioner():
 
 # --------------------- Story Generation via API ---------------------
 def generate_story_via_api(caption, token):
-    """Call Hugging Face API (Mistral 7B) to get a children's story."""
-    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
-    headers = {"Authorization": f"Bearer {token}"}
+    """Call Hugging Face InferenceClient to generate a children's story."""
+    client = InferenceClient(token=token)
     prompt = (
         f"[INST] Write a very short, sweet story for children aged 3-5. "
         f"The story must be exactly about: {caption}. "
@@ -34,24 +34,18 @@ def generate_story_via_api(caption, token):
         f"Describe what happens and how the characters feel. "
         f"End with a happy sentence. Write in third person. [/INST]"
     )
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 200,
-            "temperature": 0.8,
-            "top_p": 0.9,
-            "do_sample": True,
-            "return_full_text": False,
-        }
-    }
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        if response.status_code == 200:
-            result = response.json()
-            if isinstance(result, list) and "generated_text" in result[0]:
-                return result[0]["generated_text"].strip()
-        st.error(f"API error: {response.status_code} - {response.text}")
-        return None
+        # 使用最新的文本生成模型，可尝试多个
+        response = client.text_generation(
+            prompt,
+            model="mistralai/Mistral-7B-Instruct-v0.1",   # 如果还不行就换下面注释的那个
+            # model="HuggingFaceH4/zephyr-7b-beta",      # 备选
+            max_new_tokens=200,
+            temperature=0.8,
+            top_p=0.9,
+            repetition_penalty=1.2,
+        )
+        return response.strip()
     except Exception as e:
         st.error(f"API call failed: {e}")
         return None
