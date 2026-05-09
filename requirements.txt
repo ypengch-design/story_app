@@ -3,3 +3,4 @@ transformers>=4.30
 torch>=2.0
 Pillow>=9.0
 gtts>=2.3
+requests
