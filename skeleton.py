@@ -3,7 +3,7 @@
 
 import streamlit as st
 from PIL import Image
-from transformers import pipeline
+from transformers import BlipProcessor, BlipForConditionalGeneration
 from gtts import gTTS
 import io
 import requests
@@ -14,23 +14,19 @@ st.set_page_config(page_title="Magic Storyteller", page_icon="📖")
 st.title("🌟 AI Magic Storyteller")
 st.write("Upload a photo and I will tell you a wonderful fairy tale!")
 
-# --------------------- Local Models ---------------------
+# --------------------- Load Image Captioning Model ---------------------
 @st.cache_resource
 def load_image_captioner():
-    """Load the image captioning model (Salesforce BLIP)."""
-    return pipeline("image-to-text", model="Salesforce/blip-image-captioning-base")
+    """Load BLIP processor and model for image-to-text captioning."""
+    processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+    model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+    return processor, model
 
-captioner = load_image_captioner()   # We keep BLIP locally for image description
-
-# --------------------- API Story Generation ---------------------
+# --------------------- Story Generation via API ---------------------
 def generate_story_via_api(caption, token):
-    """
-    Call Hugging Face Inference API to generate a children's story.
-    Using mistralai/Mistral-7B-Instruct-v0.1 for excellent instruction following.
-    """
+    """Call Hugging Face API (Mistral 7B) to get a children's story."""
     API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
     headers = {"Authorization": f"Bearer {token}"}
-
     prompt = (
         f"[INST] Write a very short, sweet story for children aged 3-5. "
         f"The story must be exactly about: {caption}. "
@@ -38,7 +34,6 @@ def generate_story_via_api(caption, token):
         f"Describe what happens and how the characters feel. "
         f"End with a happy sentence. Write in third person. [/INST]"
     )
-
     payload = {
         "inputs": prompt,
         "parameters": {
@@ -49,40 +44,32 @@ def generate_story_via_api(caption, token):
             "return_full_text": False,
         }
     }
-
-    # Try API call
-    response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-    if response.status_code == 200:
-        result = response.json()
-        if isinstance(result, list) and "generated_text" in result[0]:
-            story = result[0]["generated_text"].strip()
-            return story
-        else:
-            st.error("Unexpected API response format.")
-            return None
-    else:
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            result = response.json()
+            if isinstance(result, list) and "generated_text" in result[0]:
+                return result[0]["generated_text"].strip()
         st.error(f"API error: {response.status_code} - {response.text}")
         return None
+    except Exception as e:
+        st.error(f"API call failed: {e}")
+        return None
 
+# --------------------- Post-process Story ---------------------
 def post_process_story(raw_story, caption):
-    """
-    Clean up the story, ensure full sentences, add a random happy ending if needed.
-    """
-    # Remove possible quotation marks
+    """Clean up story text, ensure 50-100 words and a happy ending."""
     story = raw_story.replace('"', '').strip()
-
-    # If it already starts with "Once upon a time", capitalize
     if story.lower().startswith("once upon a time"):
         story = story[0].upper() + story[1:]
 
-    # Truncate to the last full sentence
-    for p in ['.', '!', '?']:
-        idx = story.rfind(p)
+    # Keep only up to last full sentence
+    for punct in ['.', '!', '?']:
+        idx = story.rfind(punct)
         if idx > 10:
             story = story[:idx+1]
             break
 
-    # Ensure word count 50-100
     words = story.split()
     if len(words) < 50:
         happy_ends = [
@@ -99,10 +86,8 @@ def post_process_story(raw_story, caption):
         else:
             story = truncated + "..."
 
-    # Ensure ending punctuation
     if story and not story.endswith(('.', '!', '?')):
         story += "."
-
     return story
 
 # --------------------- Text-to-Speech ---------------------
@@ -114,28 +99,31 @@ def text2audio(story_text):
     fp.seek(0)
     return fp
 
-# --------------------- Main App ---------------------
+# --------------------- Streamlit UI ---------------------
 uploaded_file = st.file_uploader("📸 Choose a photo...", type=["jpg", "png", "jpeg"])
 
-if uploaded_file:
+if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Your Uploaded Image", use_container_width=True)
 
-    # Check if Hugging Face token is available in secrets
+    # Check for Hugging Face token in secrets
     hf_token = st.secrets.get("HF_TOKEN", None)
-
     if hf_token is None:
         st.error("⚠️ Please set your Hugging Face token in Streamlit Cloud Secrets as `HF_TOKEN`.")
         st.stop()
 
     if st.button("✨ Generate Magic Story"):
         with st.spinner("Writing your fairy tale..."):
-            # 1. Get image caption
-            caption = captioner(image)[0]["generated_text"]
+            # 1. Image captioning
+            processor, blip_model = load_image_captioner()
+            inputs = processor(image, return_tensors="pt")
+            out = blip_model.generate(**inputs)
+            caption = processor.decode(out[0], skip_special_tokens=True)
+
             st.subheader("📝 Image Caption")
             st.info(caption)
 
-            # 2. Generate story via API
+            # 2. Story generation via API
             raw_story = generate_story_via_api(caption, hf_token)
             if raw_story is None:
                 st.error("Story generation failed. Please try again.")
@@ -144,14 +132,12 @@ if uploaded_file:
             story_text = post_process_story(raw_story, caption)
             word_count = len(story_text.split())
 
-            # 3. Convert to audio
+            # 3. Text-to-speech
             audio_bytes = text2audio(story_text)
 
-            # 4. Display
+            # 4. Display results
             st.subheader(f"📖 Your Magic Story ({word_count} words)")
             st.success(story_text)
-
             st.subheader("🎙️ Listen to the Story")
             st.audio(audio_bytes, format="audio/mp3")
-
             st.balloons()
