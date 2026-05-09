@@ -8,12 +8,13 @@ from gtts import gTTS
 import io
 import random
 
-# --------------------- Page Config ---------------------
-st.set_page_config(page_title="Kids Story Generator", page_icon="🧸")
+# Page Config
+st.set_page_config(page_title="Kids Story Generator", # Browser tab title
+                   page_icon="🧸")
 st.title("🧸 AI Storyteller for Kids (Ages 3-10)")
 st.write("Upload a picture, and I'll tell you a magical story!")
 
-# --------------------- Load Models (unchanged) ---------------------
+# Load Models
 @st.cache_resource
 def load_image_captioner():
     processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
@@ -27,7 +28,7 @@ def load_story_generator():
     model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
     return tokenizer, model
 
-# --------------------- Helper Functions ---------------------
+# Helper Functions
 def img2text(image):
     processor, model = load_image_captioner()
     inputs = processor(image, return_tensors="pt")
@@ -50,6 +51,7 @@ def is_story_good(story_text, caption):
 
 def generate_story_internal(caption, tokenizer, model):
     """Attempt to generate a good story, up to 3 retries."""
+    # Instruction that enforces happy, positive content
     prompt = (
         f"Write a very short, sweet, and happy story for little children aged 3-5. "
         f"The story must be exactly about: {caption}. "
@@ -59,6 +61,7 @@ def generate_story_internal(caption, tokenizer, model):
     )
     best_story = ""
     for attempt in range(3):
+        # Tokenize and generate
         inputs = tokenizer(prompt, return_tensors="pt")
         outputs = model.generate(
             **inputs,
@@ -69,7 +72,7 @@ def generate_story_internal(caption, tokenizer, model):
             repetition_penalty=1.8,
         )
         raw = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
-        # Clean artifacts
+        # Remove possible prefixes the model may add
         for prefix in ["story:", "answer:"]:
             if raw.lower().startswith(prefix):
                 raw = raw[len(prefix):].strip()
@@ -77,19 +80,21 @@ def generate_story_internal(caption, tokenizer, model):
         if is_story_good(raw, caption) and len(raw.split()) >= 30:
             best_story = raw
             break
-        best_story = raw  # keep last attempt even if not ideal
+        best_story = raw  
     return best_story
 
 def text2story(caption):
     tokenizer, model = load_story_generator()
     raw_story = generate_story_internal(caption, tokenizer, model)
 
-    # Post-processing: ensure full sentence, right length
+    # Keep only up to the last complete sentence
     for punct in ['.', '!', '?']:
         idx = raw_story.rfind(punct)
         if idx > 10:
             raw_story = raw_story[:idx+1]
             break
+            
+    # Capitalise the first letter
     if raw_story:
         raw_story = raw_story[0].upper() + raw_story[1:]
 
@@ -103,13 +108,15 @@ def text2story(caption):
         ]
         raw_story += random.choice(happy_ends)
     elif len(words) > 100:
+        # If too long, truncate at the last full sentence within the first 100 words
         truncated = " ".join(words[:100])
         last_p = max(truncated.rfind('.'), truncated.rfind('!'), truncated.rfind('?'))
         if last_p > 10:
             raw_story = truncated[:last_p+1]
         else:
             raw_story = truncated + "..."
-
+            
+    # Make sure the story ends with punctuation
     if raw_story and not raw_story.endswith(('.', '!', '?')):
         raw_story += "."
 
@@ -122,25 +129,31 @@ def text2audio(story_text):
     fp.seek(0)
     return fp
 
-# --------------------- UI ---------------------
+# Main part
 uploaded_file = st.file_uploader("📸 Choose a photo...", type=["jpg", "png", "jpeg"])
 
 if uploaded_file is not None:
+    # Show the uploaded image
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Your Picture", use_container_width=True)
 
+    # Button triggers the whole pipeline
     if st.button("✨ Generate Story"):
         with st.spinner("Creating a story just for you..."):
+            # Step 1: Image captioning
             caption = img2text(image)
             st.subheader("📝 What I see in the picture")
             st.info(caption)
 
+            # Step 2: Story generation
             story_text = text2story(caption)
             word_count = len(story_text.split())
             st.subheader(f"📖 Your Story ({word_count} words)")
             st.success(story_text)
 
+            # Step 3: Text‑to‑speech
             audio_bytes = text2audio(story_text)
             st.subheader("🎧 Listen to the story")
             st.audio(audio_bytes, format="audio/mp3")
+            
             st.balloons()
